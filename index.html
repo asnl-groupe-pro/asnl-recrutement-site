@@ -186,7 +186,19 @@ async function flush(){
     setStatus('Sauvegardé ✓');
   }catch(e){setStatus('Erreur de sauvegarde');}
   busy=false;
-  if(!S.ready&&loaded.people&&loaded.agents&&loaded.meta){S.ready=true;render();}
+  if(!S.ready&&loaded.people&&loaded.agents&&loaded.meta){S.ready=true;migrateRv();render();}
+}
+function rvTxt(p){var o=[];if(p.rvAgent)o.push('Agent '+p.rvAgent+' %');if(p.rvJoueur)o.push('Joueur '+p.rvJoueur+' %');return o.join(' · ');}
+function migrateRv(){
+  var ch=false;
+  S.people.forEach(function(p){
+    if(p.rvAgent!==undefined||p.rvJoueur!==undefined||!p.clauses)return;
+    var c=p.clauses,ag=null,jo=null;
+    if(/au joueur/i.test(c)){var m=c.match(/(\d+(?:[.,]\d+)?)\s*%/);if(m)jo=parseFloat(m[1].replace(',','.'));}
+    else if(/mandat|agent/i.test(c)){var ms=c.match(/(\d+(?:[.,]\d+)?)\s*%/g)||[];ag=ms.reduce(function(a,x){return a+parseFloat(x.replace(',','.'));},0);}
+    if(ag!=null||jo!=null){p.rvAgent=ag;p.rvJoueur=jo;ch=true;}
+  });
+  if(ch)persist('people');
 }
 var loaded={};
 function applySnap(n,snap){
@@ -198,7 +210,7 @@ function applySnap(n,snap){
       if(n==='people'&&!S.people.length){S.people=seedPeople();persist('people');}
       if(n==='agents'){persist('agents');}
       if(n==='meta'){persist('meta');}
-      if(all&&!wasReady){S.ready=true;render();}
+      if(all&&!wasReady){S.ready=true;migrateRv();render();}
     }
     return;
   }
@@ -353,12 +365,12 @@ function listPeople(){
 function effTable(){
   var L=listPeople();
   if(!L.length)return '<div class="sub" style="padding:20px;text-align:center">Aucun joueur pour ce filtre.</div>';
-  return '<div class="tw"><table><thead><tr><th>Joueur</th><th>Poste</th><th>Âge</th><th>Valeur</th><th>Proj CPM</th><th>CPM total</th><th>Fin de contrat</th><th>Option</th><th>Brut / mois</th><th>Clauses</th><th>Décision</th></tr></thead><tbody>'+
+  return '<div class="tw"><table><thead><tr><th>Joueur</th><th>Poste</th><th>Âge</th><th>Valeur</th><th>Proj CPM</th><th>CPM total</th><th>Fin de contrat</th><th>Option</th><th>Brut / mois</th><th>Clauses</th><th>Revente</th><th>Décision</th></tr></thead><tbody>'+
    L.map(function(p){
     var a=age(p.birth);
     return '<tr class="cl" data-act="open" data-id="'+p.id+'"><td><b>'+pname(p)+'</b>'+tmLink(p)+(p.kind==='pret'?' <span class="chip cn">prêté</span>':'')+(p.kind==='formation'?' <span class="chip cn">'+(ucat(p.birth)||'formation')+'</span>':'')+(missing(p).length?' <span class="chip cy" title="À compléter : '+esc(missing(p).join(', '))+'">à compléter</span>':'')+'</td>'+
      '<td>'+esc(p.pos||'—')+'</td><td>'+(a==null?'—':a)+'</td><td>'+esc(p.value||'—')+'</td><td>'+(p.proj==null?'—':p.proj)+staleChip(p)+'</td><td>'+(p.total==null?'—':p.total)+'</td>'+
-     '<td>'+(p.kind==='formation'&&!p.end?'<span class="mut">—</span>':cchip(p.end))+(p.endNote?' <span title="'+esc(p.endNote)+'">ⓘ</span>':'')+'</td><td class="mut">'+esc(p.option||'—')+'</td><td>'+money(p.salary)+'</td><td class="mut" style="max-width:220px">'+esc(p.clauses||'')+'</td>'+
+     '<td>'+(p.kind==='formation'&&!p.end?'<span class="mut">—</span>':cchip(p.end))+(p.endNote?' <span title="'+esc(p.endNote)+'">ⓘ</span>':'')+'</td><td class="mut">'+esc(p.option||'—')+'</td><td>'+money(p.salary)+'</td><td class="mut" style="max-width:220px">'+esc(p.clauses||'')+'</td><td>'+(rvTxt(p)||'<span class="mut">—</span>')+'</td>'+
      '<td><select class="sel" data-sel="dec" data-id="'+p.id+'"><option value="">À décider</option>'+DECS.map(function(d){return '<option value="'+d[0]+'"'+(p.decision===d[0]?' selected':'')+'>'+d[1]+'</option>';}).join('')+'</select></td></tr>';
    }).join('')+'</tbody></table></div>';
 }
@@ -451,7 +463,7 @@ function vAgents(){
   var pl=S.people.filter(function(p){return p.agentId===cur.id;});
   var td=S.meta.todos.filter(function(t){return t.aid===cur.id&&!t.done;});
   var det='<div class="card" style="flex:1;min-width:300px"><div class="g2"><label class="l">Nom<input class="in" data-ag="last" value="'+esc(cur.last!=null?cur.last:cur.name)+'"></label><label class="l">Prénom<input class="in" data-ag="first" value="'+esc(cur.first||'')+'"></label><label class="l">Téléphone, WhatsApp, e-mail<input class="in" data-ag="contact" value="'+esc(cur.contact||'')+'"></label></div>'+
-   '<div class="sub" style="margin:8px 0">Joueurs liés : '+(pl.length?pl.map(function(p){return '<a href="#" data-act="open" data-id="'+p.id+'">'+esc(p.name)+'</a>';}).join(', '):'aucun')+'</div>'+
+   '<div class="sub" style="margin:8px 0">Joueurs liés : '+(pl.length?pl.map(function(p){return '<a href="#" data-act="open" data-id="'+p.id+'">'+esc(p.name)+'</a>'+(p.rvAgent?' <span class="chip co">'+p.rvAgent+' % revente</span>':'');}).join(', '):'aucun')+'</div>'+
    (td.length?'<h3>Relances</h3>'+td.map(todoRow).join(''):'')+
    '<h3>Nouvel échange</h3><div class="g2"><label class="l">Type<select class="in" id="ag_type"><option>Appel</option><option>WhatsApp</option><option>Rendez-vous</option><option>E-mail</option></select></label><label class="l">Relancer le<input class="in" type="date" id="ag_due"></label></div>'+
    '<label class="l" style="margin-top:8px">Résumé<textarea class="in" id="ag_txt"></textarea></label><div style="margin-top:8px"><button class="btn sm" data-act="aglog">Ajouter à l\'historique</button> <button class="btn2 sm" data-act="delagent" data-id="'+cur.id+'">Supprimer l\'agent</button></div>'+
@@ -481,6 +493,7 @@ function mFiche(p){
     '<div style="margin-top:8px"><button class="btn2 sm" data-act="topro">Passer dans l\'effectif</button></div>';
   if(p.kind==='formation')o+='<h3>Radar jeune</h3><div class="g2">'+fld(p,'remind','Revoir le','date')+fld(p,'next','Prochaine étape probable')+'</div>';
   o+='<div class="g2"><label class="l">Agent<select class="in" data-f="agentId">'+selOpts(S.agents.map(function(x){return [x.id,esc(x.name||'(sans nom)')];}),p.agentId,'—')+'</select></label></div>';
+  o+='<h3>Pourcentages à la revente</h3><div class="g2">'+fld(p,'rvAgent','% de revente dû à l\'agent (mandats cumulés)','number','step="any" inputmode="decimal"')+fld(p,'rvJoueur','% de revente dû au joueur','number','step="any" inputmode="decimal"')+'</div><div class="sub">'+(p.decision==='vendre'&&rvTxt(p)?'À reverser en cas de vente : '+rvTxt(p)+' du montant du transfert. ':'')+'Le détail (exclusif, non exclusif…) reste dans le champ Clauses.</div>';
   o+='<h3>Relances</h3>'+(td.length?td.map(todoRow).join(''):'<div class="sub">Aucune relance.</div>')+
     '<div class="filters" style="margin-top:6px"><input class="in" style="flex:1;min-width:140px" id="nt_txt" placeholder="Relance (ex. appeler l\'agent)"><input class="in" style="width:150px" type="date" id="nt_due"><button class="btn2 sm" data-act="addtodo">Ajouter</button></div>';
   o+='<h3>Notes</h3><div class="filters"><textarea class="in" id="nt_note" placeholder="Nouvelle note (le micro de ton clavier fonctionne ici)"></textarea></div><div style="margin-top:6px"><button class="btn2 sm" data-act="addnote">Ajouter la note</button></div>'+
@@ -568,7 +581,7 @@ async function loadBackups(){
 
 /* ---------- actions ---------- */
 function setField(p,f,val){
-  if(f==='salary'||f==='proj'||f==='total'){val=val===''?(f==='salary'?0:null):parseFloat(val);}
+  if(f==='salary'||f==='proj'||f==='total'||f==='rvAgent'||f==='rvJoueur'){val=val===''?(f==='salary'?0:null):parseFloat(val);if(val!=null&&isNaN(val))val=null;}
   if(f==='core'){val=val==='oui';}
   if(f==='proj'||f==='total'){
     var old=p[f];if(old===val)return;
@@ -675,7 +688,7 @@ async function exportXlsx(){
     try{
     if(!window.XLSX)await loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
     var wb=XLSX.utils.book_new();
-    var rowP=function(p){return {Nom:p.name,Catégorie:KINDS[p.kind],Poste:p.pos,Naissance:p.birth,Fin_de_contrat:p.end,Note_date:p.endNote,Option:p.option,Brut_mensuel:p.salary,Clauses:p.clauses,Décision:labelDec(p.decision),Valeur:p.value,Proj_CPM:p.proj,CPM_total:p.total,Data_du:p.dataDate,Cadre:p.core?'oui':'',Mindset:p.mindset,Archétype:p.archetype,Évaluation:p.ev,Statut:p.status||'',Fenêtre:p.window||'',UE:p.eu||'',Fee:p.fee||''};};
+    var rowP=function(p){return {Nom:p.name,Catégorie:KINDS[p.kind],Poste:p.pos,Naissance:p.birth,Fin_de_contrat:p.end,Note_date:p.endNote,Option:p.option,Brut_mensuel:p.salary,Clauses:p.clauses,Revente_agent_pct:p.rvAgent==null?'':p.rvAgent,Revente_joueur_pct:p.rvJoueur==null?'':p.rvJoueur,Décision:labelDec(p.decision),Valeur:p.value,Proj_CPM:p.proj,CPM_total:p.total,Data_du:p.dataDate,Cadre:p.core?'oui':'',Mindset:p.mindset,Archétype:p.archetype,Évaluation:p.ev,Statut:p.status||'',Fenêtre:p.window||'',UE:p.eu||'',Fee:p.fee||''};};
     XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(S.people.filter(function(p){return p.kind!=='cible';}).map(rowP)),'Effectif');
     XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(S.people.filter(function(p){return p.kind==='cible';}).map(rowP)),'Cibles');
     XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(S.agents.map(function(a){return {Nom:a.name,Contact:a.contact||'',Joueurs:S.people.filter(function(p){return p.agentId===a.id;}).map(function(p){return p.name;}).join(', '),Historique:(a.log||[]).map(function(l){return l.d+' '+l.type+' : '+l.t;}).join(' | ')};})),'Agents');
