@@ -120,7 +120,7 @@ var OFFS = {LW:44,RW:44};
 var DECS = [['prolonger','Prolonger'],['garder','Garder'],['vendre','Vendre'],['pret','Prêt'],['acheter','Acheter'],['liberer','Libérer']];
 var KINDS = {pro:'Pro',pret:'Prêté',formation:'Formation',cible:'Cible'};
 var S = {people:[],agents:[],meta:{shadow:{},journal:[],todos:[],set:{red:12,orange:24,yellow:36,stale:30}},
-  tab:'alertes',flt:'tous',q:'',pos:'',sort:'contrat',hor:0,modal:null,ready:false,status:'Chargement…',offline:false,ctab:'liste'};
+  tab:'alertes',flt:'tous',q:'',pos:'',agf:'',sort:'contrat',hor:0,modal:null,ready:false,status:'Chargement…',offline:false,ctab:'liste'};
 window.onerror=function(m,u,l){var e=document.getElementById("app");if(e&&!S.ready)e.innerHTML='<div style="padding:20px">Erreur : '+String(m).replace(/</g,"&lt;")+" (ligne "+l+")</div>";};
 var db = null, dirty = {}, busy = false, saveTimer = null;
 
@@ -186,7 +186,31 @@ async function flush(){
     setStatus('Sauvegardé ✓');
   }catch(e){setStatus('Erreur de sauvegarde');}
   busy=false;
-  if(!S.ready&&loaded.people&&loaded.agents&&loaded.meta){S.ready=true;migrateRv();render();}
+  if(!S.ready&&loaded.people&&loaded.agents&&loaded.meta){S.ready=true;migrateRv();migrateAgents();render();}
+}
+function anorm(x){return String(x||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
+function agName(id){var a=A(id);return a?(a.name||'(sans nom)'):'';}
+function agPlayers(id){return S.people.filter(function(p){return p.agentId===id;});}
+function agFindByName(n){var k=anorm(n);if(!k)return null;return S.agents.filter(function(a){return anorm(a.name)===k;})[0]||null;}
+function migrateAgents(){
+  var ch=false;
+  // fusion des doublons (même nom normalisé) : on garde le premier, on reporte joueurs, relances et historique
+  var seen={};
+  S.agents=S.agents.filter(function(a){
+    var k=anorm(a.name);if(!k)return true;
+    if(!seen[k]){seen[k]=a;return true;}
+    var keep=seen[k];
+    S.people.forEach(function(p){if(p.agentId===a.id){p.agentId=keep.id;}});
+    (S.meta.todos||[]).forEach(function(t){if(t.aid===a.id)t.aid=keep.id;});
+    keep.log=(keep.log||[]).concat(a.log||[]);
+    if(!keep.contact&&a.contact)keep.contact=a.contact;
+    ch=true;return false;});
+  // lien saisi autrement qu'avec un id (nom d'agent) : on le convertit en id
+  S.people.forEach(function(p){
+    if(p.agentId&&!A(p.agentId)){var f=agFindByName(p.agentId);if(f){p.agentId=f.id;ch=true;}}
+    if(p.agent&&!p.agentId){var g=agFindByName(p.agent);if(g){p.agentId=g.id;ch=true;}}
+  });
+  if(ch){persist('people');persist('agents');persist('meta');}
 }
 function rvTxt(p){var o=[];if(p.rvAgent)o.push('Agent '+p.rvAgent+' %');if(p.rvJoueur)o.push('Joueur '+p.rvJoueur+' %');return o.join(' · ');}
 function migrateRv(){
@@ -210,7 +234,7 @@ function applySnap(n,snap){
       if(n==='people'&&!S.people.length){S.people=seedPeople();persist('people');}
       if(n==='agents'){persist('agents');}
       if(n==='meta'){persist('meta');}
-      if(all&&!wasReady){S.ready=true;migrateRv();render();}
+      if(all&&!wasReady){S.ready=true;migrateRv();migrateAgents();render();}
     }
     return;
   }
@@ -304,6 +328,14 @@ function alertCount(){
 }
 function head(title,subtitle,extra){return '<div class="top"><div><h1>'+title+'</h1><div class="sub">'+subtitle+'</div></div><div class="filters">'+(extra||'')+'</div></div>';}
 
+function agentGroups(){
+  var s=S.meta.set,by={};
+  S.people.forEach(function(p){
+    if(!(p.kind==='pro'||p.kind==='pret')||!p.agentId||!A(p.agentId))return;
+    var m=months(p.end);if(m==null||m<=0||m>s.orange)return;
+    var y=String(p.end).slice(0,4),k=p.agentId+'|'+y;(by[k]=by[k]||{a:p.agentId,y:y,L:[]}).L.push(p);});
+  return Object.keys(by).map(function(k){return by[k];}).filter(function(g){return g.L.length>=2;}).sort(function(a,b){return b.L.length-a.L.length||(a.y<b.y?-1:1);});
+}
 function vAlertes(){
   if(S.ready&&!S.people.length)return head('Bienvenue','Aucune donnée pour l\'instant')+importBox();
   var s=S.meta.set,act=S.people.filter(function(p){return p.kind==='pro'||p.kind==='pret';});
@@ -327,6 +359,8 @@ function vAlertes(){
     :'<div class="sub">Aucun contrat à surveiller.</div>';
   o+='<div class="sub" style="margin-top:10px">La couleur suit la date de base. L\'année en option, tu la valides à la main dans la fiche.</div></div>';
   o+='<div class="col" style="flex:1;min-width:280px">';
+  var grp=agentGroups();
+  if(grp.length)o+='<div class="card"><h2>Par agent</h2>'+grp.map(function(g){return '<div style="padding:6px 0"><a href="#" data-act="goagent" data-id="'+g.a+'"><b>'+esc(agName(g.a))+'</b></a> : '+g.L.length+' joueurs finissent en '+g.y+'<div class="sub">'+g.L.map(function(p){return '<a href="#" data-act="open" data-id="'+p.id+'">'+esc(p.name)+'</a>';}).join(', ')+'</div></div>';}).join('')+'</div>';
   o+='<div class="card"><h2>À prolonger</h2>'+(prol.length?prol.map(function(p){return '<div style="padding:4px 0"><a href="#" data-act="open" data-id="'+p.id+'"><b>'+esc(p.name)+'</b></a> '+cchip(p.end)+'</div>';}).join(''):'<div class="sub">Aucun joueur marqué « Prolonger ».</div>')+'</div>';
   o+='<div class="card"><h2>À vendre / libérer</h2>'+(sort.length?sort.map(function(p){return '<div style="padding:4px 0"><a href="#" data-act="open" data-id="'+p.id+'"><b>'+esc(p.name)+'</b></a> '+decLabel(p)+' '+cchip(p.end)+'</div>';}).join(''):'<div class="sub">Aucun joueur à vendre ou libérer.</div>')+'</div>';
   o+='<div class="card"><h2>À acheter</h2>'+(ach.length?ach.map(function(p){return '<div style="padding:4px 0"><a href="#" data-act="open" data-id="'+p.id+'"><b>'+esc(p.name)+'</b></a> '+cchip(p.end)+'</div>';}).join(''):'<div class="sub">Aucun joueur marqué « Acheter ».</div>')+'</div>';
@@ -353,6 +387,8 @@ function listPeople(){
     if(S.flt==='pret'&&p.kind!=='pret')return false;
     if(S.flt==='formation'&&p.kind!=='formation')return false;
     if(S.pos&&!samePos(p,S.pos)&&p.pos!==S.pos)return false;
+    if(S.agf==='_none'&&p.agentId)return false;
+    if(S.agf&&S.agf!=='_none'&&p.agentId!==S.agf)return false;
     if(q&&norm(p.name).indexOf(q)<0)return false;return true;});
   var so=S.sort;
   L.sort(function(a,b){
@@ -365,12 +401,12 @@ function listPeople(){
 function effTable(){
   var L=listPeople();
   if(!L.length)return '<div class="sub" style="padding:20px;text-align:center">Aucun joueur pour ce filtre.</div>';
-  return '<div class="tw"><table><thead><tr><th>Joueur</th><th>Poste</th><th>Âge</th><th>Valeur</th><th>Proj CPM</th><th>CPM total</th><th>Fin de contrat</th><th>Option</th><th>Brut / mois</th><th>Clauses</th><th>Revente</th><th>Décision</th></tr></thead><tbody>'+
+  return '<div class="tw"><table><thead><tr><th>Joueur</th><th>Poste</th><th>Âge</th><th>Valeur</th><th>Proj CPM</th><th>CPM total</th><th>Fin de contrat</th><th>Option</th><th>Brut / mois</th><th>Agent</th><th>Clauses</th><th>Revente</th><th>Décision</th></tr></thead><tbody>'+
    L.map(function(p){
     var a=age(p.birth);
     return '<tr class="cl" data-act="open" data-id="'+p.id+'"><td><b>'+pname(p)+'</b>'+tmLink(p)+(p.kind==='pret'?' <span class="chip cn">prêté</span>':'')+(p.kind==='formation'?' <span class="chip cn">'+(ucat(p.birth)||'formation')+'</span>':'')+(missing(p).length?' <span class="chip cy" title="À compléter : '+esc(missing(p).join(', '))+'">à compléter</span>':'')+'</td>'+
      '<td>'+esc(p.pos||'—')+'</td><td>'+(a==null?'—':a)+'</td><td>'+esc(p.value||'—')+'</td><td>'+(p.proj==null?'—':p.proj)+staleChip(p)+'</td><td>'+(p.total==null?'—':p.total)+'</td>'+
-     '<td>'+(p.kind==='formation'&&!p.end?'<span class="mut">—</span>':cchip(p.end))+(p.endNote?' <span title="'+esc(p.endNote)+'">ⓘ</span>':'')+'</td><td class="mut">'+esc(p.option||'—')+'</td><td>'+money(p.salary)+'</td><td class="mut" style="max-width:220px">'+esc(p.clauses||'')+'</td><td>'+(rvTxt(p)||'<span class="mut">—</span>')+'</td>'+
+     '<td>'+(p.kind==='formation'&&!p.end?'<span class="mut">—</span>':cchip(p.end))+(p.endNote?' <span title="'+esc(p.endNote)+'">ⓘ</span>':'')+'</td><td class="mut">'+esc(p.option||'—')+'</td><td>'+money(p.salary)+'</td><td>'+(p.agentId&&A(p.agentId)?'<a href="#" data-act="goagent" data-id="'+p.agentId+'">'+esc(agName(p.agentId))+'</a>':'<span class="mut">—</span>')+'</td><td class="mut" style="max-width:220px">'+esc(p.clauses||'')+'</td><td>'+(rvTxt(p)||'<span class="mut">—</span>')+'</td>'+
      '<td><select class="sel" data-sel="dec" data-id="'+p.id+'"><option value="">À décider</option>'+DECS.map(function(d){return '<option value="'+d[0]+'"'+(p.decision===d[0]?' selected':'')+'>'+d[1]+'</option>';}).join('')+'</select></td></tr>';
    }).join('')+'</tbody></table></div>';
 }
@@ -381,6 +417,7 @@ function vEffectif(){
   o+='<div class="filters">'+fl.map(function(f){return '<button class="f'+(S.flt===f[0]?' on':'')+'" data-act="flt" data-v="'+f[0]+'">'+f[1]+'</button>';}).join('')+
    '<input class="in" style="width:200px" id="q" placeholder="Rechercher" value="'+esc(S.q)+'" aria-label="Rechercher">'+
    '<select class="sel" data-sel="posf" style="min-height:36px"><option value="">Tous postes</option>'+POS.map(function(p){return '<option'+(S.pos===p?' selected':'')+'>'+p+'</option>';}).join('')+'</select>'+
+   '<select class="sel" data-sel="agf" style="min-height:36px" aria-label="Filtrer par agent"><option value="">Tous agents</option><option value="_none"'+(S.agf==='_none'?' selected':'')+'>Sans agent</option>'+S.agents.map(function(a){return '<option value="'+a.id+'"'+(S.agf===a.id?' selected':'')+'>'+esc(a.name||'(sans nom)')+' ('+agPlayers(a.id).length+')</option>';}).join('')+'</select>'+
    '<select class="sel" data-sel="sort" style="min-height:36px">'+[['contrat','Tri : contrat'],['nom','Tri : nom'],['poste','Tri : poste'],['proj','Tri : Proj CPM']].map(function(x){return '<option value="'+x[0]+'"'+(S.sort===x[0]?' selected':'')+'>'+x[1]+'</option>';}).join('')+'</select></div>';
   o+='<div class="card" style="padding:6px 8px" id="tbl">'+effTable()+'</div>';
   o+='<div class="sub">Clic sur une ligne : fiche joueur. Jeunes de la formation : filtre « Formation » (ajoute-les avec + Ajouter).</div>';
@@ -453,17 +490,27 @@ function vCibles(){
 }
 function evChip(p){var cl=p.ev==='excellent'?'cg':p.ev==='good'?'cy':p.ev==='insuffisant'?'cr':'co';var t=p.ev==='excellent'?'Excellent':p.ev==='good'?'Good':p.ev==='insuffisant'?'Insuffisant':'à évaluer';return '<span class="chip '+cl+'">'+t+'</span>';}
 
+function agentPlayers(cur,pl){
+  var tot=0,n=0;pl.forEach(function(p){if(p.rvAgent){tot+=p.rvAgent;n++;}});
+  var o='<h3>Joueurs liés ('+pl.length+')</h3>';
+  if(!pl.length)return o+'<div class="sub">Aucun joueur. Choisis cet agent dans le champ « Agent » de la fiche d\'un joueur.</div>';
+  o+='<div class="tw"><table><thead><tr><th>Joueur</th><th>Poste</th><th>Fin de contrat</th><th>Décision</th><th>Statut</th><th>% revente agent</th></tr></thead><tbody>'+
+   pl.slice().sort(function(a,b){var ma=months(a.end),mb=months(b.end);return (ma==null?999:ma)-(mb==null?999:mb);}).map(function(p){
+    return '<tr class="cl" data-act="open" data-id="'+p.id+'"><td><b>'+pname(p)+'</b></td><td>'+esc(p.pos||'—')+'</td><td>'+(p.kind==='formation'&&!p.end?'<span class="mut">—</span>':cchip(p.end))+'</td><td>'+decLabel(p)+'</td><td><span class="chip cn">'+(KINDS[p.kind]||p.kind)+'</span></td><td>'+(p.rvAgent?p.rvAgent+' %':'<span class="mut">—</span>')+'</td></tr>';}).join('')+'</tbody></table></div>';
+  o+='<div class="card" style="margin-top:10px;background:#f8fafc"><b>Revente cumulée due à cet agent : '+(tot?tot+' %':'aucun %')+'</b>'+(n?'<div class="sub">Somme des « % de revente dû à l\'agent » de ses '+n+' joueur(s) concerné(s) : '+pl.filter(function(p){return p.rvAgent;}).map(function(p){return esc(surname(p.name))+' '+p.rvAgent+' %';}).join(' · ')+'. Ce sont des pourcentages du montant de chaque transfert, pas à additionner entre joueurs différents pour un seul transfert.</div>':'<div class="sub">Renseigne le % dans la fiche de chaque joueur.</div>')+'</div>';
+  return o;
+}
 function vAgents(){
   var o=head('Agents','Contacts et historique des échanges','<button class="btn sm" data-act="newagent">+ Agent</button>');
   if(!S.agents.length)return o+'<div class="card" style="text-align:center;padding:32px"><b>Aucun agent pour l\'instant</b><div class="sub" style="margin:6px 0 14px">Ajoute un agent, puis lie-le à un joueur depuis la fiche du joueur.</div><button class="btn" data-act="newagent">+ Agent</button></div>';
   var cur=A(S.curAgent)||S.agents[0];S.curAgent=cur.id;
   var list='<div class="card" style="width:280px;flex:none;display:flex;flex-direction:column;gap:6px;max-width:100%">'+S.agents.map(function(a){
     var n=S.meta.todos.filter(function(t){return t.aid===a.id&&!t.done&&t.due<=TODAY;}).length;
-    return '<button class="btn2" style="text-align:left;'+(a.id===cur.id?'background:#fde1e4;':'')+'" data-act="agent" data-id="'+a.id+'">'+esc(a.name||'(sans nom)')+(n?' <span class="chip cr">relance</span>':'')+'</button>';}).join('')+'</div>';
+    return '<button class="btn2" style="text-align:left;'+(a.id===cur.id?'background:#fde1e4;':'')+'" data-act="agent" data-id="'+a.id+'">'+esc(a.name||'(sans nom)')+' <span class="mut">· '+agPlayers(a.id).length+' joueur(s)</span>'+(n?' <span class="chip cr">relance</span>':'')+'</button>';}).join('')+'</div>';
   var pl=S.people.filter(function(p){return p.agentId===cur.id;});
   var td=S.meta.todos.filter(function(t){return t.aid===cur.id&&!t.done;});
   var det='<div class="card" style="flex:1;min-width:300px"><div class="g2"><label class="l">Nom<input class="in" data-ag="last" value="'+esc(cur.last!=null?cur.last:cur.name)+'"></label><label class="l">Prénom<input class="in" data-ag="first" value="'+esc(cur.first||'')+'"></label><label class="l">Téléphone, WhatsApp, e-mail<input class="in" data-ag="contact" value="'+esc(cur.contact||'')+'"></label></div>'+
-   '<div class="sub" style="margin:8px 0">Joueurs liés : '+(pl.length?pl.map(function(p){return '<a href="#" data-act="open" data-id="'+p.id+'">'+esc(p.name)+'</a>'+(p.rvAgent?' <span class="chip co">'+p.rvAgent+' % revente</span>':'');}).join(', '):'aucun')+'</div>'+
+   agentPlayers(cur,pl)+
    (td.length?'<h3>Relances</h3>'+td.map(todoRow).join(''):'')+
    '<h3>Nouvel échange</h3><div class="g2"><label class="l">Type<select class="in" id="ag_type"><option>Appel</option><option>WhatsApp</option><option>Rendez-vous</option><option>E-mail</option></select></label><label class="l">Relancer le<input class="in" type="date" id="ag_due"></label></div>'+
    '<label class="l" style="margin-top:8px">Résumé<textarea class="in" id="ag_txt"></textarea></label><div style="margin-top:8px"><button class="btn sm" data-act="aglog">Ajouter à l\'historique</button> <button class="btn2 sm" data-act="delagent" data-id="'+cur.id+'">Supprimer l\'agent</button></div>'+
@@ -492,7 +539,7 @@ function mFiche(p){
     '<label class="l">Passeport UE<select class="in" data-f="eu">'+selOpts([['oui','Oui'],['non','Non']],p.eu||'','—')+'</select></label>'+fld(p,'fee','Fee attendu')+'<label class="l">Fin de contrat Transfermarkt<input class="in" data-f="endTM" type="date" value="'+esc(p.endTM||'')+'"></label></div>'+
     '<div style="margin-top:8px"><button class="btn2 sm" data-act="topro">Passer dans l\'effectif</button></div>';
   if(p.kind==='formation')o+='<h3>Radar jeune</h3><div class="g2">'+fld(p,'remind','Revoir le','date')+fld(p,'next','Prochaine étape probable')+'</div>';
-  o+='<div class="g2"><label class="l">Agent<select class="in" data-f="agentId">'+selOpts(S.agents.map(function(x){return [x.id,esc(x.name||'(sans nom)')];}),p.agentId,'—')+'</select></label></div>';
+  o+='<div class="g2"><label class="l">Agent<select class="in" data-f="agentId">'+selOpts(S.agents.map(function(x){return [x.id,esc(x.name||'(sans nom)')];}).concat([['__new','+ Nouvel agent…']]),p.agentId,'—')+'</select></label>'+(p.agentId&&A(p.agentId)?'<div class="sub" style="align-self:end"><a href="#" data-act="goagent" data-id="'+p.agentId+'">Voir la fiche de l\'agent</a> · '+agPlayers(p.agentId).length+' joueur(s) au total</div>':'')+'</div>';
   o+='<h3>Pourcentages à la revente</h3><div class="g2">'+fld(p,'rvAgent','% de revente dû à l\'agent (mandats cumulés)','number','step="any" inputmode="decimal"')+fld(p,'rvJoueur','% de revente dû au joueur','number','step="any" inputmode="decimal"')+'</div><div class="sub">'+(p.decision==='vendre'&&rvTxt(p)?'À reverser en cas de vente : '+rvTxt(p)+' du montant du transfert. ':'')+'Le détail (exclusif, non exclusif…) reste dans le champ Clauses.</div>';
   o+='<h3>Relances</h3>'+(td.length?td.map(todoRow).join(''):'<div class="sub">Aucune relance.</div>')+
     '<div class="filters" style="margin-top:6px"><input class="in" style="flex:1;min-width:140px" id="nt_txt" placeholder="Relance (ex. appeler l\'agent)"><input class="in" style="width:150px" type="date" id="nt_due"><button class="btn2 sm" data-act="addtodo">Ajouter</button></div>';
@@ -627,6 +674,7 @@ document.addEventListener('click',function(e){
   if(a==='addtodo'){var tx2=document.getElementById('nt_txt').value.trim(),du=document.getElementById('nt_due').value;if(!tx2||!du){toast('Texte et date requis');return;}S.meta.todos.push({id:uid(),pid:S.modal.id,text:tx2,due:du,done:false});persist('meta');render();return;}
   if(a==='tdone'){S.meta.todos.forEach(function(x){if(x.id===id)x.done=true;});persist('meta');render();return;}
   if(a==='delp'){if(!t.getAttribute('data-ok')){t.setAttribute('data-ok','1');t.textContent='Confirmer la suppression';return;}S.people=S.people.filter(function(x){return x.id!==S.modal.id;});persist('people');S.modal=null;render();return;}
+  if(a==='goagent'){e.preventDefault();S.modal=null;S.curAgent=id;S.tab='agents';render();window.scrollTo(0,0);return;}
   if(a==='newagent'){var ag2={id:uid(),name:'Nouvel agent',last:'Nouvel agent',first:'',contact:'',log:[]};S.agents.push(ag2);S.curAgent=ag2.id;persist('agents');S.tab='agents';render();return;}
   if(a==='agent'){S.curAgent=id;render();return;}
   if(a==='aglog'){var cur=A(S.curAgent),tx3=document.getElementById('ag_txt').value.trim();if(!tx3)return;cur.log=cur.log||[];cur.log.unshift({d:TODAY,type:document.getElementById('ag_type').value,t:tx3});persist('agents');
@@ -661,11 +709,13 @@ document.addEventListener('click',function(e){
 document.addEventListener('change',function(e){
   var t=e.target;
   var f=t.getAttribute&&t.getAttribute('data-f');
-  if(f&&S.modal&&S.modal.t==='fiche'){var p=P(S.modal.id);setField(p,f,t.value);if(['kind','pos','end','core','proj','total','birth'].indexOf(f)>=0){render();}return;}
+  if(f==='agentId'&&t.value==='__new'&&S.modal&&S.modal.t==='fiche'){var nm=(window.prompt('Nom de l\'agent (Nom Prénom)')||'').trim();var pp=P(S.modal.id);if(!nm){render();return;}var ex=agFindByName(nm);if(!ex){ex={id:uid(),name:nm,last:nm,first:'',contact:'',log:[]};S.agents.push(ex);persist('agents');toast('Agent créé');}else{toast('Cet agent existe déjà, lien ajouté');}pp.agentId=ex.id;persist('people');render();return;}
+  if(f&&S.modal&&S.modal.t==='fiche'){var p=P(S.modal.id);setField(p,f,t.value);if(['kind','pos','end','core','proj','total','birth','agentId','rvAgent'].indexOf(f)>=0){render();}return;}
   var sel=t.getAttribute&&t.getAttribute('data-sel');
   if(sel==='dec'){var pd=P(t.getAttribute('data-id'));var o=pd.decision;pd.decision=t.value;log(pd.id,'Décision : '+labelDec(o)+' → '+labelDec(t.value));persist('people');persist('meta');return;}
   if(sel==='impfile'){readImport(t);return;}
   if(sel==='posf'){S.pos=t.value;render();return;}
+  if(sel==='agf'){S.agf=t.value;render();return;}
   if(sel==='sort'){S.sort=t.value;render();return;}
   if(sel==='slot'){var sl=t.getAttribute('data-slot'),i=parseInt(t.getAttribute('data-i'),10);var h=(S.meta.shadow[sl]||['','','']).slice();h[i]=t.value;S.meta.shadow[sl]=h;persist('meta');render();return;}
   if(sel==='impp'){var r=S.modal.rows[parseInt(t.getAttribute('data-i'),10)];r.pid=t.value;render();return;}
