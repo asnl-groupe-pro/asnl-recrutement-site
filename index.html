@@ -117,7 +117,7 @@ var TODAY = new Date().toISOString().slice(0,10);
 var POS = ['GK','RB','RCB','LCB','LB','DM','CM','AM','RW','LW','ST'];
 var SLOT_ROWS = [['LW','ST','RW'],['LCM','RCM'],['DM'],['LB','LCB','RCB','RB'],['GK']];
 var OFFS = {LW:44,RW:44};
-var DECS = [['prolonger','Prolonger'],['garder','Garder'],['vendre','Vendre'],['pret','Prêt'],['sortir','Libérer ou transférer'],['liberer','Libérer (fin de contrat)']];
+var DECS = [['prolonger','Prolonger'],['garder','Garder'],['vendre','Vendre'],['pret','Prêt'],['acheter','Acheter'],['liberer','Libérer']];
 var KINDS = {pro:'Pro',pret:'Prêté',formation:'Formation',cible:'Cible'};
 var S = {people:[],agents:[],meta:{shadow:{},journal:[],todos:[],set:{red:12,orange:24,yellow:36,stale:30}},
   tab:'alertes',flt:'tous',q:'',pos:'',sort:'contrat',hor:0,modal:null,ready:false,status:'Chargement…',offline:false,ctab:'liste'};
@@ -298,7 +298,8 @@ function vAlertes(){
   var red=act.filter(function(p){var m=months(p.end);return m!=null&&m<=s.red&&m>0;});
   var watch=act.filter(function(p){var m=months(p.end);return m!=null&&m<=s.orange;}).sort(function(a,b){return months(a.end)-months(b.end);});
   var prol=S.people.filter(function(p){return p.decision==='prolonger';});
-  var sort=S.people.filter(function(p){return p.decision==='sortir'||p.decision==='vendre'||p.decision==='liberer';});
+  var sort=S.people.filter(function(p){return p.decision==='vendre'||p.decision==='liberer';});
+  var ach=S.people.filter(function(p){return p.decision==='acheter';});
   var todos=S.meta.todos.filter(function(t){return !t.done;}).sort(function(a,b){return a.due<b.due?-1:1;});
   var due=todos.filter(function(t){return t.due<=TODAY;});
   var st=S.people.filter(function(p){var d=stale(p);return d!=null&&d>s.stale;});
@@ -315,7 +316,8 @@ function vAlertes(){
   o+='<div class="sub" style="margin-top:10px">La couleur suit la date de base. L\'année en option, tu la valides à la main dans la fiche.</div></div>';
   o+='<div class="col" style="flex:1;min-width:280px">';
   o+='<div class="card"><h2>À prolonger</h2>'+(prol.length?prol.map(function(p){return '<div style="padding:4px 0"><a href="#" data-act="open" data-id="'+p.id+'"><b>'+esc(p.name)+'</b></a> '+cchip(p.end)+'</div>';}).join(''):'<div class="sub">Aucun joueur marqué « Prolonger ».</div>')+'</div>';
-  o+='<div class="card"><h2>À libérer / transférer</h2>'+(sort.length?sort.map(function(p){return '<div style="padding:4px 0"><a href="#" data-act="open" data-id="'+p.id+'"><b>'+esc(p.name)+'</b></a> '+decLabel(p)+' '+cchip(p.end)+'</div>';}).join(''):'<div class="sub">Aucun joueur à libérer ou transférer.</div>')+'</div>';
+  o+='<div class="card"><h2>À vendre / libérer</h2>'+(sort.length?sort.map(function(p){return '<div style="padding:4px 0"><a href="#" data-act="open" data-id="'+p.id+'"><b>'+esc(p.name)+'</b></a> '+decLabel(p)+' '+cchip(p.end)+'</div>';}).join(''):'<div class="sub">Aucun joueur à vendre ou libérer.</div>')+'</div>';
+  o+='<div class="card"><h2>À acheter</h2>'+(ach.length?ach.map(function(p){return '<div style="padding:4px 0"><a href="#" data-act="open" data-id="'+p.id+'"><b>'+esc(p.name)+'</b></a> '+cchip(p.end)+'</div>';}).join(''):'<div class="sub">Aucun joueur marqué « Acheter ».</div>')+'</div>';
   o+='<div class="card"><h2>Relances</h2>'+(todos.length?todos.slice(0,8).map(function(t){return todoRow(t);}).join(''):'<div class="sub">Aucune relance.</div>')+'</div>';
   o+='<div class="card"><h2>Radar jeunes</h2>'+(radar.length?radar.map(function(p){return '<div style="padding:4px 0"><a href="#" data-act="open" data-id="'+p.id+'"><b>'+esc(p.name)+'</b></a> <span class="chip '+(p.remind<=TODAY?'cr':'cn')+'">à revoir le '+fdate(p.remind)+'</span><div class="sub">'+esc(p.next||'')+'</div></div>';}).join(''):'<div class="sub">Aucun jeune avec une date de rappel.</div>')+'</div>';
   o+='</div></div>';
@@ -324,7 +326,7 @@ function vAlertes(){
   return o;
 }
 function kpi(t,n,cls,tag){return '<div class="card kpi"><span class="sub">'+t+'</span><b>'+n+'</b><span class="chip '+cls+'">'+tag+'</span></div>';}
-function decLabel(p){var d=DECS.filter(function(x){return x[0]===p.decision;})[0];return d?'<span class="chip '+(p.decision==='prolonger'?'co':p.decision==='garder'?'cg':(p.decision==='liberer'||p.decision==='sortir')?'cr':'cn')+'">'+d[1]+'</span>':'<span class="chip cn">À décider</span>';}
+function decLabel(p){var d=DECS.filter(function(x){return x[0]===p.decision;})[0];return d?'<span class="chip '+(p.decision==='prolonger'?'co':p.decision==='garder'?'cg':p.decision==='liberer'?'cr':p.decision==='acheter'?'co':'cn')+'">'+d[1]+'</span>':'<span class="chip cn">À décider</span>';}
 function todoRow(t){
   var who=t.pid?(P(t.pid)||{}).name:t.aid?(A(t.aid)||{}).name:'';
   var late=t.due<TODAY;
